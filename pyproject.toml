@@ -1,0 +1,22 @@
+[project]
+name = "food_delivery_multiagent"
+version = "0.1.0"
+description = "Food delivery planning using a multi-agent system communicating over A2A and using MCP"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "click>=8.2.0",
+    "google-adk>=1.7.0",
+    "gradio>=5.30.0",
+    "langchain-mcp-adapters>=0.1.0",
+    "mcp>=1.5.0",
+    "a2a-sdk>=0.3.0",
+    "litellm",
+    "uvicorn>=0.30.0",
+    "httpx>=0.28.0",
+    "python-dotenv>=1.0.1",
+    "psycopg2-binary>=2.9.10",
+]
+
+[tool.uv.sources]
+food-delivery-multiagent = { workspace = true }
