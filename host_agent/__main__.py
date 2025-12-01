@@ -116,6 +116,7 @@ async def main():
     demo.queue().launch(
         server_name='0.0.0.0',
         server_port=8083,
+        share=True
     )
     print('Gradio application has been shut down.')
 

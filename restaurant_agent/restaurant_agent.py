@@ -4,6 +4,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from google.adk.agents import LlmAgent
+from google.adk import Agent
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.tools.mcp_tool.mcp_toolset import (
     MCPToolset,
@@ -26,7 +27,14 @@ def _mcp_server_params() -> StdioServerParameters:
 
 def create_restaurant_agent() -> LlmAgent:
     """Create the Restaurant LlmAgent that uses the restaurant_db MCP tools."""
-    model_name = os.getenv("LITELLM_MODEL", "gemini-2.5-flash")
+    # model_name = os.getenv("LITELLM_MODEL", "gemini/gemini-2.0-flash")
+    # api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+
+    # model = LiteLlm(
+    #     model=model_name,
+    #     api_key=api_key,        # 👈 important: no ADC, just API key
+    # )
+
 
     instruction = """
     You are the RestaurantAgent in a food delivery platform.
@@ -63,7 +71,7 @@ def create_restaurant_agent() -> LlmAgent:
     """
 
     return LlmAgent(
-        model=LiteLlm(model=model_name),
+        model="gemini-2.5-flash",
         name="restaurant_agent",
         description=(
             "Uses restaurant_db MCP tools to fetch menus, prices, and estimate "
@@ -78,19 +86,19 @@ def create_restaurant_agent() -> LlmAgent:
     )
 
 
-if __name__ == "__main__":
-    # Simple local test
-    import asyncio
-    from google.adk.runners import Runner
+# if __name__ == "__main__":
+#     # Simple local test
+#     import asyncio
+#     from google.adk.runners import Runner
 
-    async def _demo():
-        agent = create_restaurant_agent()
-        runner = Runner(agent)
-        user_query = (
-            "For restaurant_id=1, if I order items [1,2], "
-            "what is the total price and preparation time?"
-        )
-        result = await runner.run(user_query)
-        print("AGENT RESPONSE:\n", result.text)
+#     async def _demo():
+#         agent = create_restaurant_agent()
+#         runner = Runner(agent)
+#         user_query = (
+#             "For restaurant_id=1, if I order items [1,2], "
+#             "what is the total price and preparation time?"
+#         )
+#         result = await runner.run(user_query)
+#         print("AGENT RESPONSE:\n", result.text)
 
-    asyncio.run(_demo())
+#     asyncio.run(_demo())
