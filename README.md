@@ -14,21 +14,21 @@ how to build a food delivery orchestration system using:
 
 ### 1. End-to-end multi-agent architecture
 
-![Food Delivery Multi-Agent Architecture](./food_delivery_architecture.png)
+![Food Delivery Multi-Agent Architecture](Assets/food_delivery_architecture.png)
 
 This diagram shows how the end user, host agent (Gradio UI + RoutingAgent),
 remote A2A agents, MCP servers, Google Routes API, and Postgres all connect.
 
 ### 2. Host Agent / Gradio UI
 
-![Food Delivery Host Agent UI](./food_delivery_agent.PNG)
+![Food Delivery Host Agent UI](Assets/food_delivery_agent.PNG)
 
 This captures the Gradio front-end where the user interacts with the
 Food Delivery Host Agent and sees combined responses (price, prep time, ETA).
 
 ### 3. Alternative Host / Flow View
 
-![Food Delivery Host Agent – Alternative View](./food_delivery_agent_1.PNG)
+![Food Delivery Host Agent – Alternative View](Assets/food_delivery_agent_1.PNG)
 
 This diagram/screenshot provides an alternate view of the host agent or
 flow that you can use in presentations or documentation.
