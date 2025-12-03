@@ -76,6 +76,8 @@ class RoutingAgent:
         self,
         conn: RemoteAgentConnection,
         text: str,
+        *,
+        label: str = "remote",
     ) -> str:
         """
         Send a simple user text message to a remote A2A agent and
@@ -83,15 +85,24 @@ class RoutingAgent:
 
         If there are no text parts, fall back to returning a JSON dump
         of the Task for debugging instead of raising.
+
+        This function logs the full lifecycle so you can see exactly
+        what is being sent and what is coming back.
         """
         message_id = str(uuid.uuid4())
+
+        print("\n[RoutingAgent] =======================================")
+        print(f"[RoutingAgent] A2A SEND -> {label}")
+        print(f"[RoutingAgent] message_id = {message_id}")
+        print(f"[RoutingAgent] text = {text!r}")
+        print("[RoutingAgent] =======================================\n")
 
         payload = {
             "message": {
                 "role": "user",
                 "parts": [
                     {
-                        "type": "text",  # NOTE: A2A uses 'type', not 'kind'
+                        "type": "text",  # A2A uses 'type'
                         "text": text,
                     }
                 ],
@@ -113,8 +124,9 @@ class RoutingAgent:
         task_obj: Task = root_like.result  # type: ignore[assignment]
 
         if not isinstance(task_obj, Task):
-            # This really shouldn't happen, but let's debug gracefully.
-            return f"REMOTE_AGENT_NON_TASK_RESULT: {task_obj!r}"
+            msg = f"REMOTE_AGENT_NON_TASK_RESULT: {task_obj!r}"
+            print(f"[RoutingAgent] !!! {label} returned non-Task result: {msg}")
+            return msg
 
         status = task_obj.status
 
@@ -126,40 +138,51 @@ class RoutingAgent:
         ):
             texts = []
             for part in status.message.parts:
-                # Many part types exist (text, function_call, tool_output, etc.)
                 if getattr(part, "text", None):
                     texts.append(part.text)
+
             if texts:
-                return "\n".join(texts)
+                joined = "\n".join(texts)
+                print(f"[RoutingAgent] A2A RECV <- {label} (text parts):")
+                print(joined)
+                return joined
 
-        # --- 2) Fallback: maybe the model put something useful in status.output / output_text ---
+        # --- 2) Fallback: use status.output if present ---
         if status:
-            # Some ADK / A2A versions may expose consolidated output here
             output = getattr(status, "output", None)
-            if output:
+            if output is not None:
                 try:
-                    return json.dumps(output, indent=2, default=str)
+                    dumped = json.dumps(output, indent=2, default=str)
                 except Exception:
-                    return str(output)
+                    dumped = str(output)
+                print(f"[RoutingAgent] A2A RECV <- {label} (status.output):")
+                print(dumped)
+                return dumped
 
-        # --- 3) Final fallback: dump the whole Task as JSON so we can see what's going on ---
+        # --- 3) Final fallback: dump the whole Task as JSON ---
         try:
-            return json.dumps(task_obj.model_dump(), indent=2, default=str)
+            dumped_task = json.dumps(task_obj.model_dump(), indent=2, default=str)
         except Exception:
-            # Last resort: repr
-            return f"REMOTE_AGENT_TASK_NO_TEXT_PARTS: {task_obj!r}"
+            dumped_task = f"REMOTE_AGENT_TASK_NO_TEXT_PARTS: {task_obj!r}"
 
+        print(f"[RoutingAgent] A2A RECV <- {label} (fallback Task dump):")
+        print(dumped_task)
+        return dumped_task
 
     # ------------------------------------------------------------------
     # Public helpers used by tools
     # ------------------------------------------------------------------
     async def call_rider(self, text: str) -> str:
         """Send arbitrary text to the rider A2A agent and return its reply text."""
-        return await self._send_text_to_agent(self.rider_conn, text)
+        return await self._send_text_to_agent(self.rider_conn, text, label="rider")
 
     async def call_restaurant(self, text: str) -> str:
         """Send arbitrary text to the restaurant A2A agent and return its reply text."""
-        return await self._send_text_to_agent(self.restaurant_conn, text)
+        return await self._send_text_to_agent(
+            self.restaurant_conn,
+            text,
+            label="restaurant",
+        )
 
     async def ask_restaurant_prep_and_price(
         self,
@@ -186,13 +209,29 @@ class RoutingAgent:
             "1. Validate the restaurant exists.\n"
             "2. Fetch the menu items and their prices.\n"
             "3. Compute the total price of the selected items.\n"
-            "4. Estimate the preparation time in minutes.\n"
+            "4. Estimate the preparation time in minutes.\n\n"
             "Return ONLY a JSON object with keys:\n"
             "  restaurant_id, restaurant_name, item_ids, total_price_inr, estimated_prep_minutes.\n"
-            "Do not include any additional commentary outside the JSON."
+            "Do not include any additional commentary outside the JSON.\n"
+            'If there is any problem (e.g. restaurant not found, DB error), '
+            'return a JSON object with a top-level key "error" and a helpful '
+            "error message string."
         )
 
-        return await self._send_text_to_agent(self.restaurant_conn, query)
+        print(
+            "[RoutingAgent] >>> ask_restaurant_prep_and_price("
+            f"restaurant_id={restaurant_id}, menu_item_ids={menu_item_ids})"
+        )
+
+        result_text = await self._send_text_to_agent(
+            self.restaurant_conn,
+            query,
+            label="restaurant-prep",
+        )
+
+        print("[RoutingAgent] <<< ask_restaurant_prep_and_price result:")
+        print(result_text)
+        return result_text
 
     # ------------------------------------------------------------------
     # Build the host ADK LlmAgent (orchestrator)
@@ -204,76 +243,141 @@ class RoutingAgent:
         - restaurant_tool
         - restaurant_prep_tool
         """
+
         async def rider_tool(query: str) -> str:
+            print(f"[RoutingAgent] TOOL CALL rider_tool(query={query!r})")
             return await self.call_rider(query)
 
         async def restaurant_tool(query: str) -> str:
+            print(f"[RoutingAgent] TOOL CALL restaurant_tool(query={query!r})")
             return await self.call_restaurant(query)
 
         async def restaurant_prep_tool(
-            restaurant_id: int, menu_item_ids: list[int]
+            restaurant_id: int,
+            menu_item_ids: list[int],
         ) -> str:
-            return await self.ask_restaurant_prep_and_price(
-                restaurant_id, menu_item_ids
+            """
+            Tool the LLM must use to compute price + prep time.
+
+            IMPORTANT: This function NEVER fabricates 'tools unresponsive'.
+            It simply returns whatever JSON string the RestaurantAgent
+            replied with. If there is a problem, the RestaurantAgent
+            should include an "error" field in the JSON.
+            """
+            print(
+                "[RoutingAgent] TOOL CALL restaurant_prep_tool("
+                f"restaurant_id={restaurant_id}, menu_item_ids={menu_item_ids})"
             )
+            try:
+                result = await self.ask_restaurant_prep_and_price(
+                    restaurant_id,
+                    menu_item_ids,
+                )
+                return result
+            except Exception as e:
+                # We DO NOT put the phrase "tools unresponsive" here.
+                # Instead we return a JSON object with an "error" field.
+                print("[RoutingAgent] ERROR in restaurant_prep_tool:", repr(e))
+                error_payload = {
+                    "error": f"restaurant_prep_tool exception: {str(e)}",
+                    "restaurant_id": restaurant_id,
+                    "menu_item_ids": menu_item_ids,
+                }
+                return json.dumps(error_payload)
 
         instruction = """
 You are the FoodDeliveryOrchestrator host agent.
 
-The END USER will speak in NATURAL LANGUAGE and does NOT know internal database IDs.
+The END USER speaks in NATURAL LANGUAGE and does NOT know internal database IDs.
 
 You have three tools:
 
 1) rider_tool(query: str)
-   - Sends a user query to the RiderAgent over A2A.
-   - Use this when you want to compute distance/ETA between restaurant and customer.
+   - Sends a query to the RiderAgent over A2A.
+   - Use this to compute distance and rider ETA between restaurant and customer.
 
 2) restaurant_tool(query: str)
-   - Sends a user query to the RestaurantAgent over A2A.
+   - Sends a query to the RestaurantAgent over A2A.
    - Use this for general menu questions, restaurant discovery, etc.
 
 3) restaurant_prep_tool(restaurant_id: int, menu_item_ids: list[int])
    - Asks the RestaurantAgent to compute total price and prep time for specific items.
-   - The RestaurantAgent will use its MCP tools (get_menu, estimate_prep_time)
+   - The RestaurantAgent will use its MCP tools (get_restaurant, get_menu, estimate_prep_time)
      and return a JSON object with:
        restaurant_id, restaurant_name, item_ids, total_price_inr, estimated_prep_minutes.
+   - If there is a problem, the JSON will contain a top-level "error" field.
 
-VERY IMPORTANT:
-- The USER will say restaurant names and dish names, like:
-    - "Spice Hub"
-    - "Paneer Tikka", "Butter Naan"
-- The USER will NOT say "restaurant_id=1" or "item_ids=[1,2]".
-- YOU (the host agent) must translate NAMES → INTERNAL IDs using the mapping below,
-  then call restaurant_prep_tool with the correct IDs.
+VERY IMPORTANT BEHAVIOR RULES:
 
-Current restaurant/menu mapping (keep this in your memory and use it):
+- Whenever the user asks about:
+    * ordering food,
+    * price / bill,
+    * kitchen preparation time,
+    * delivery ETA,
+  you MUST call the tools. Do NOT guess prices or prep times.
+
+- Use restaurant_prep_tool to get price + prep time.
+- Use rider_tool to get rider ETA.
+
+- The USER speaks in names, e.g.:
+    * "Spice Hub"
+    * "Paneer Tikka", "Butter Naan"
+
+- The USER does not say numeric IDs. Internally, YOU map names → IDs.
+
+Current restaurant/menu mapping you MUST use:
 
 - Restaurant 1: "Spice Hub"
     - Menu item 1: "Paneer Tikka"
     - Menu item 2: "Butter Naan"
     - Menu item 3: "Veg Biryani"
 
-(If the user says "Spice Hub", treat that as restaurant_id=1.
- If the user says "Paneer Tikka", include item_id=1.
- If "Butter Naan", include item_id=2, etc.)
+Mapping rules:
 
-When planning a delivery:
-- First:
-    - Parse the user's sentence to identify restaurant name and dish names.
-    - Map them to restaurant_id and menu_item_ids using the mapping above.
-    - Call restaurant_prep_tool(restaurant_id, menu_item_ids) to get price + prep time.
-- Then:
-    - Use rider_tool(query) to compute distance and rider ETA between pickup and delivery addresses.
-- Finally:
-    - Combine everything in a clear final answer to the user, for example:
+- If the user says "Spice Hub", treat that as restaurant_id = 1.
+- If the user says "Paneer Tikka", include item_id = 1.
+- If the user says "Butter Naan", include item_id = 2.
+- If the user says "Veg Biryani", include item_id = 3.
 
-      "Total price: 340 INR
-       Kitchen prep time: 25 minutes
-       Rider ETA: 12.2 minutes
-       Approximate delivery completion time: ~37 minutes."
+Do NOT ask the user for numeric IDs; infer them from the names using this mapping.
 
-Whenever the user speaks in names, NEVER ask them for numeric IDs.
-Internally, you figure out the IDs from this mapping and call the tools.
+FLOW WHEN USER REQUESTS AN ORDER:
+
+1. Parse the user's request:
+   - Identify the restaurant name and dish names from the text.
+   - Map them to restaurant_id and menu_item_ids using the mapping above.
+
+2. Call restaurant_prep_tool(restaurant_id, menu_item_ids):
+   - Parse its JSON result.
+   - If the result contains an "error" key, then and ONLY then
+     explain to the user that there was an error with the restaurant
+     system, and summarize the error in simple language.
+   - If there is no "error" key, NEVER claim that the tools are broken
+     or unresponsive.
+
+3. For delivery time:
+   - Identify pickup address (restaurant address) and drop address (user location).
+   - Call rider_tool with a query that clearly states:
+       - origin address
+       - destination address
+   - Parse the returned text/JSON to get an ETA in minutes when possible.
+
+4. Combine everything in a clear final answer, for example:
+
+   "Total price: 340 INR
+    Kitchen prep time: 25 minutes
+    Rider ETA: 12.2 minutes
+    Approximate delivery completion time: ~37 minutes."
+
+NO MAGIC ERROR MESSAGES:
+
+- You MUST NOT say "the restaurant's tools are unresponsive"
+  unless the JSON returned by restaurant_prep_tool includes an "error" field.
+- If there is no "error" field in that JSON, assume the restaurant tools
+  worked and use their price + prep time data.
+
+Always try to call the tools again if the user rephrases or asks to retry,
+instead of immediately giving up.
 """.strip()
 
         return LlmAgent(

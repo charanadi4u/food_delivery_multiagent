@@ -28,7 +28,6 @@ PG_DSN = os.getenv("PG_DSN")  # e.g. "postgresql://food_user:food_pwd@localhost:
 
 mcp = FastMCP("restaurant_db")
 
-
 # ---------------------------------------------------------------------
 # DB helpers
 # ---------------------------------------------------------------------
@@ -41,116 +40,7 @@ def _get_conn() -> psycopg2.extensions.connection:
             "PG_DSN=postgresql://food_user:food_pwd@localhost:5432/food_delivery"
         )
     return psycopg2.connect(PG_DSN, cursor_factory=RealDictCursor)
-
-
-def _init_schema() -> None:
-    """Create restaurants + menu_item tables if they don't exist.
-
-    Optionally seed some sample data when the DB is empty.
-    """
-    conn = _get_conn()
-    try:
-        cur = conn.cursor()
-
-        # Restaurants table
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS restaurants (
-                id                  SERIAL PRIMARY KEY,
-                name                TEXT NOT NULL,
-                address             TEXT,
-                cuisine             TEXT,
-                avg_prep_minutes    INT DEFAULT 20,
-                is_open             BOOLEAN DEFAULT TRUE
-            );
-            """
-        )
-
-        # Menu items
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS menu_item (
-                id                  SERIAL PRIMARY KEY,
-                restaurant_id       INT NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
-                name                TEXT NOT NULL,
-                description         TEXT,
-                price_inr           NUMERIC(10,2) NOT NULL,
-                is_available        BOOLEAN DEFAULT TRUE,
-                avg_prep_minutes    INT DEFAULT 15
-            );
-            """
-        )
-
-        conn.commit()
-
-        # Seed minimal sample data if there are no restaurants yet
-        cur.execute("SELECT COUNT(*) AS c FROM restaurants;")
-        count = cur.fetchone()["c"]
-        if count == 0:
-            _seed_sample_data(cur)
-            conn.commit()
-
-    finally:
-        conn.close()
-
-
-def _seed_sample_data(cur: psycopg2.extensions.cursor) -> None:
-    """Seed a couple of sample restaurants + menus for testing."""
-    # Restaurant 1
-    cur.execute(
-        """
-        INSERT INTO restaurants (name, address, cuisine, avg_prep_minutes)
-        VALUES (%s, %s, %s, %s)
-        RETURNING id;
-        """,
-        ("Spice Hub", "MG Road, Bengaluru", "Indian", 25),
-    )
-    spice_hub_id = cur.fetchone()["id"]
-
-    # Restaurant 2
-    cur.execute(
-        """
-        INSERT INTO restaurants (name, address, cuisine, avg_prep_minutes)
-        VALUES (%s, %s, %s, %s)
-        RETURNING id;
-        """,
-        ("Pizza Planet", "Indiranagar, Bengaluru", "Italian", 20),
-    )
-    pizza_planet_id = cur.fetchone()["id"]
-
-    # Menus
-    cur.execute(
-        """
-        INSERT INTO menu_item (restaurant_id, name, description, price_inr, avg_prep_minutes)
-        VALUES
-        (%s, %s, %s, %s, %s),
-        (%s, %s, %s, %s, %s),
-        (%s, %s, %s, %s, %s);
-        """,
-        (
-            spice_hub_id,
-            "Paneer Tikka",
-            "Grilled cottage cheese with spices",
-            280.00,
-            18,
-            spice_hub_id,
-            "Butter Naan",
-            "Soft tandoori naan with butter",
-            60.00,
-            8,
-            pizza_planet_id,
-            "Margherita Pizza",
-            "Classic cheese and tomato pizza",
-            350.00,
-            20,
-        ),
-    )
-
-
-# Initialize schema on module import
-_init_schema()
-
-
+    
 # ---------------------------------------------------------------------
 # MCP tools
 # ---------------------------------------------------------------------
@@ -325,6 +215,7 @@ def estimate_prep_time(
             (row["id"], row["name"], row["avg_prep_minutes"] or base_prep)
             for row in rows
         ]
+        
         max_item_prep = max(p for _, _, p in item_prep_times)
         est_prep = max(base_prep, max_item_prep)
 
